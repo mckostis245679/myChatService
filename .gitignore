@@ -1,0 +1,17 @@
+# --------------------
+# Cryptographic keys & secrets (VERY IMPORTANT)
+# --------------------
+*.pem
+*.key
+
+# --------------------
+# Cryptographic keys & secrets (VERY IMPORTANT)
+# --------------------
+*.pem
+*.key
+
+
+# --------------------
+# Binary / encrypted output files
+# --------------------
+*.bin
