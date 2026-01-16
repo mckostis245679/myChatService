@@ -3,32 +3,61 @@ from Cryptodome.Hash import SHA256, TupleHash128
 from Cryptodome.PublicKey import RSA
 from Cryptodome.Random import get_random_bytes
 from Cryptodome.Cipher import AES, PKCS1_OAEP
+import os
+
+
+
+def load_user(user_dir):
+    if os.path.exists(user_dir):
+        # with open(user_dir+"/rsa_private.pem", "rb") as f:
+        #     private_key = RSA.import_key(f.read())
+        with open(user_dir+"/rsa_public.pem", "rb") as f:
+            myPK = f.read()
+        with open(user_dir+"/rsa_username.pem", "r") as f:
+            myName = f.read().strip()
+        with open(user_dir+"/rsa_userqueue.pem", "r") as f:
+            myQueue = f.read().strip()
+
+        print(f"[USER] Loaded existing keys...")
+        return myName, myQueue, myPK
+    else :
+        print(f"[USER] Generating keys...")
+        return generate_user_identity(user_dir)
 
 
 
 
-def generate_user_identity(passphrase='userpass'):
+def generate_user_identity(user_dir):
+    os.makedirs(user_dir, exist_ok=True)
 
     RSA_key_pair = RSA.generate(2048)
 
     # ... extraction of private key from RSA-KEY pair ...
     mySK = RSA_key_pair.export_key()
-    print(mySK.decode('utf-8'))
-
     # ... extraction of public key from RSA-KEY pair ...
     myPK = RSA_key_pair.publickey().export_key()
-    print(myPK.decode('utf-8'))
     # ... creation of a HEX-printable username (string) from RSA public key ...
+
     PublicKeyHash = TupleHash128.new(digest_bytes=8)
     PublicKeyHash.update(myPK)
     myName = PublicKeyHash.hexdigest()
-
+    
     PrivateKeyHash = TupleHash128.new(digest_bytes=32)
     PrivateKeyHash.update(mySK)
     myQueue = PrivateKeyHash.hexdigest()
-    with open("./rsa_private.pem", "wb") as f:
-        f.write(mySK)
     
+    with open(user_dir+"/rsa_private.pem", "wb") as f:
+        f.write(mySK)
+
+    with open(user_dir+"/rsa_public.pem", "wb") as f:
+        f.write(myPK)
+
+    with open( user_dir +"/rsa_username.pem", "w") as f:
+        f.write(myName)
+
+    with open( user_dir +"/rsa_userqueue.pem", "w") as f:
+        f.write(myQueue)
+
     return myName, myQueue, myPK
 
 

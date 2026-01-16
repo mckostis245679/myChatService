@@ -3,20 +3,15 @@ from Cryptodome.PublicKey import RSA
 from Cryptodome.Cipher import PKCS1_OAEP
 from crypto_layer import *
 import pika
+import os
+
+
 
 #rabbitmq set up
 connection = pika.BlockingConnection(pika.ConnectionParameters("localhost"))
 channel = connection.channel()
 
 BROKER_QUEUE = "broker_public"
-passphrase = "userpass"
-
-# ---------------- IDENTITY ----------------
-myName, myQueue, myPK = generate_user_identity(passphrase)
-print(f"[USER] username = {myName}")
-
-#create a unique queue for the user
-channel.queue_declare(queue=myQueue, durable=True)
 
 msgBrokerPK = RSA.import_key(open("broker_public.pem").read())
 cipher_rsa = PKCS1_OAEP.new(msgBrokerPK)
@@ -38,7 +33,8 @@ def register():
     # Encrypt the data with the AES session key
     cipher_aes = AES.new(session_key, AES.MODE_EAX)
     ciphertext, tag = cipher_aes.encrypt_and_digest(original_message)
-    mySK = RSA.import_key(open("./rsa_private.pem",'rb').read())
+
+    mySK = RSA.import_key(open(user_dir+"/rsa_private.pem",'rb').read())
     h = SHA256.new(original_message)
     original_message_signature = pss.new(mySK).sign(h)
 
@@ -55,7 +51,14 @@ def register():
                      body=json.dumps(package).encode())
     print("[USER] Registered")
 
-# # ---------------- SEND MESSAGE ----------------
+def callback(ch, method, properties, body):
+    message = json.loads(body)
+    msg_type = message.get("type")
+    
+    if msg_type == "registration_ack":
+        print("[ACK] " + message["content"])
+
+
 # def send_message():
 #     receiver = input("Receiver username: ")
 #     text = input("Message: ").encode()
@@ -96,15 +99,20 @@ def register():
 #     channel.basic_consume(queue=queue, on_message_callback=cb, auto_ack=True)
 #     channel.start_consuming()
 
-# ---------------- MAIN ----------------
-register()
-#threading.Thread(target=receive, daemon=True).start()
+# ---------------- MAIN ---------------
+print("Login with your username:")
+user = input("> ")
 
-while True:
-    print("\n1. Send message\n2. Exit")
-    c = input("> ")
-    if c == "1":
-        break
-        #send_message()
-    elif c == "2":
-        break
+user_dir = os.path.join("users", user)
+myName, myQueue, myPK = load_user(user_dir)
+print(f"[USER] username = {myName}")
+register()
+#create a unique queue for the user
+channel.queue_declare(queue=myQueue, durable=True)
+channel.basic_consume(queue=myQueue,on_message_callback=callback,auto_ack=True)
+channel.start_consuming()
+
+
+
+
+
