@@ -3,8 +3,7 @@ from Cryptodome.Hash import SHA256, TupleHash128
 from Cryptodome.PublicKey import RSA
 from Cryptodome.Random import get_random_bytes
 from Cryptodome.Cipher import AES, PKCS1_OAEP
-import os
-
+import os, json
 
 
 def load_user(user_dir):
@@ -61,30 +60,43 @@ def generate_user_identity(user_dir):
     return myName, myQueue, myPK
 
 
-def encrypt_message(message, receiver_public_key):
-    receiver_pk = RSA.import_key(receiver_public_key)
+def encrypt_message(original_message, user_dir, PK):
 
     session_key = get_random_bytes(16)
-    enc_session_key = PKCS1_OAEP.new(receiver_pk).encrypt(session_key)
+    cipher_rsa = PKCS1_OAEP.new(PK)
+    enc_session_key = cipher_rsa.encrypt(session_key)
 
-    cipher = AES.new(session_key, AES.MODE_EAX)
-    ciphertext, tag = cipher.encrypt_and_digest(message)
+    # Encrypt the data with the AES session key
+    cipher_aes = AES.new(session_key, AES.MODE_EAX)
+    ciphertext, tag = cipher_aes.encrypt_and_digest(original_message)
 
-    return {
-        "esk": enc_session_key,
-        "nonce": cipher.nonce,
-        "tag": tag,
-        "ct": ciphertext
+    mySK = RSA.import_key(open(user_dir+"/rsa_private.pem",'rb').read())
+    h = SHA256.new(original_message)
+    original_message_signature = pss.new(mySK).sign(h)
+
+    package = {
+        "enc_session_key": enc_session_key.hex(),
+        "nonce": cipher_aes.nonce.hex(),
+        "tag": tag.hex(),
+        "ciphertext": ciphertext.hex(),
+        "signature": original_message_signature.hex()
     }
+    return package
 
+def decrypt_message(encrypted_msg, user_dir):
+    package = json.loads(encrypted_msg)
+    enc_session_key = bytes.fromhex(package["enc_session_key"])
+    nonce = bytes.fromhex(package["nonce"])
+    ciphertext = bytes.fromhex(package["ciphertext"])
+    tag = bytes.fromhex(package["tag"])
+    mySK = RSA.import_key(open(user_dir+"/rsa_private.pem",'rb').read())
+    rsa_cipher = PKCS1_OAEP.new(mySK)
+    session_key = rsa_cipher.decrypt(enc_session_key)
 
-def decrypt_message(enc, encrypted_keypair, passphrase):
-    keypair = RSA.import_key(encrypted_keypair, passphrase=passphrase)
-    private_key = RSA.import_key(keypair.export_key())
+    cipher_aes = AES.new(session_key, AES.MODE_EAX, nonce)
+    decrypted_message = cipher_aes.decrypt_and_verify(ciphertext, tag)
 
-    session_key = PKCS1_OAEP.new(private_key).decrypt(enc["esk"])
-    cipher = AES.new(session_key, AES.MODE_EAX, enc["nonce"])
-    return cipher.decrypt_and_verify(enc["ct"], enc["tag"])
+    return json.loads(decrypted_message.decode())
 
 
 def sign_message(message, encrypted_keypair, passphrase):
