@@ -5,6 +5,8 @@ from Cryptodome.Random import get_random_bytes
 from Cryptodome.Cipher import AES, PKCS1_OAEP
 import os, json
 
+from CH9_HeaderFile import print_msg
+
 
 def load_user(user_dir):
     if os.path.exists(user_dir):
@@ -22,9 +24,6 @@ def load_user(user_dir):
     else :
         print(f"[USER] Generating keys...")
         return generate_user_identity(user_dir)
-
-
-
 
 def generate_user_identity(user_dir):
     os.makedirs(user_dir, exist_ok=True)
@@ -74,44 +73,48 @@ def encrypt_message(original_message, user_dir, PK):
     h = SHA256.new(original_message)
     original_message_signature = pss.new(mySK).sign(h)
 
-    package = {
+    encrypted_msg = {
         "enc_session_key": enc_session_key.hex(),
         "nonce": cipher_aes.nonce.hex(),
         "tag": tag.hex(),
         "ciphertext": ciphertext.hex(),
         "signature": original_message_signature.hex()
     }
-    return package
+    return encrypted_msg
 
 def decrypt_message(encrypted_msg, user_dir):
-    package = json.loads(encrypted_msg)
-    enc_session_key = bytes.fromhex(package["enc_session_key"])
-    nonce = bytes.fromhex(package["nonce"])
-    ciphertext = bytes.fromhex(package["ciphertext"])
-    tag = bytes.fromhex(package["tag"])
+    """Decrypt message without signature verification"""
+    enc_session_key = bytes.fromhex(encrypted_msg["enc_session_key"])
+    nonce = bytes.fromhex(encrypted_msg["nonce"])
+    ciphertext = bytes.fromhex(encrypted_msg["ciphertext"])
+    tag = bytes.fromhex(encrypted_msg["tag"])
+    
     mySK = RSA.import_key(open(user_dir+"/rsa_private.pem",'rb').read())
-    rsa_cipher = PKCS1_OAEP.new(mySK)
-    session_key = rsa_cipher.decrypt(enc_session_key)
 
+    # Decrypt AES session key with RSA private key
+    cipher_rsa = PKCS1_OAEP.new(mySK)
+    session_key = cipher_rsa.decrypt(enc_session_key)
+
+    # Decrypt original message with AES session key
     cipher_aes = AES.new(session_key, AES.MODE_EAX, nonce)
     decrypted_message = cipher_aes.decrypt_and_verify(ciphertext, tag)
 
-    return json.loads(decrypted_message.decode())
+    return decrypted_message, encrypted_msg.get("signature")
 
+def verify_signature(decrypted_message, signature_hex, sender_PK):
+    """Verify the signature of a decrypted message"""
+    if isinstance(signature_hex, str):
+        signature = bytes.fromhex(signature_hex)
+    else:
+        signature = signature_hex
+    
+    h = SHA256.new(decrypted_message)
+    verifier = pss.new(sender_PK)
 
-def sign_message(message, encrypted_keypair, passphrase):
-    keypair = RSA.import_key(encrypted_keypair, passphrase=passphrase)
-    private_key = RSA.import_key(keypair.export_key())
-
-    h = SHA256.new(message)
-    return pss.new(private_key).sign(h)
-
-
-def verify_signature(message, signature, sender_public_key):
-    pk = RSA.import_key(sender_public_key)
-    h = SHA256.new(message)
     try:
-        pss.new(pk).verify(h, signature)
+        verifier.verify(h, signature)
+        print("[RECEIVER] The SENDER's signature is authentic.")
         return True
-    except ValueError:
+    except (ValueError, TypeError):
+        print("[RECEIVER] The SENDER's signature is NOT authentic.")
         return False
