@@ -96,7 +96,7 @@ def callback(ch, method, props, body):
             "msgTheme":"transient_announcement",
             "announcement":msg["announcement"]
         }
-        encrypted_message=encrypt_message(json.dumps(message).encode('utf-8'),msgBrokerPK)
+        encrypted_message=encrypt_message(json.dumps(message).encode('utf-8'),private_key)
         
         channel.exchange_declare(exchange=topic, exchange_type='fanout')
         channel.basic_publish(
