@@ -86,6 +86,8 @@ def message_callback(ch, method, properties, body):
 
     elif msg_type == "transient_announcement":
         print("[USER] Received transient announcement: " + message["announcement"])
+    elif msg_type == "persistent_announcement":
+        print("[USER] Received persistent announcement: " + message["announcement"])
 
     else:
         print("[USER] Unknown message type received:", msg_type)
