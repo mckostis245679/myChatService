@@ -58,7 +58,11 @@ def callback(ch, method, props, body):
             
             with open(STATE_FILE, "w") as f:
                 json.dump(publicKeysDict, f)
-            
+            if msg["senderName"] % 2 == 0:
+                subscribe_persistent(channel,"odd_group",msg["userQueue"])
+            else:
+                subscribe_transient(channel,"even_group",msg["userQueue"])
+
             send_ack(user_name, "Registration successful.")
         return
 
@@ -92,23 +96,15 @@ def callback(ch, method, props, body):
 
     elif msg["msgTheme"] == "announce_transient":
         topic = msg["topic"]
+        subscribe_transient(channel,topic,publicKeysDict[user_name]["userQueue"])
         publish_transient(channel,topic,msg)
         print(f"[BROKER] Announced transient message on topic: {topic}")
-    
-    elif msg["msgTheme"] == "subscribe_transient":
-        topic = msg["topic"]
-        subscribe_transient(channel,topic,publicKeysDict[user_name]["userQueue"])
-        print(f"[BROKER] {user_name} subscribed to transient topic: {topic}")
 
     elif msg["msgTheme"] == "announce_persistent":
         topic = msg["topic"]
+        subscribe_persistent(channel,topic,publicKeysDict[user_name]["userQueue"])
         publish_persistent(channel,topic,msg)
         print(f"[BROKER] Announced persistent message on topic: {topic}")
-
-    elif msg["msgTheme"] == "subscribe_persistent":
-        topic = msg["topic"]
-        subscribe_persistent(channel,topic,publicKeysDict[user_name]["userQueue"])
-        print(f"[BROKER] {user_name} subscribed to persistent topic: {topic}")
 
     elif msg["msgTheme"] == "announce_evenGroup":
         if msg["senderName"] % 2 != 0:
@@ -199,21 +195,11 @@ def publish_persistent(channel, topic, encrypted_message):
 
 def subscribe_transient(channel, topic, user_queue):
     channel.exchange_declare(exchange=topic, exchange_type='fanout', durable=False)
-
-    # Transient queue (typical): exclusive + auto-delete
-    # If you already have a per-user queue, ensure it was created transiently for transient usage.
-    channel.queue_declare(queue=user_queue, durable=False, exclusive=False, auto_delete=True)
-
     channel.queue_bind(exchange=topic, queue=user_queue)
 
 def subscribe_persistent(channel, topic, user_queue):
     channel.exchange_declare(exchange=topic, exchange_type='fanout', durable=True)
-
-    # Durable queue is REQUIRED if you want messages stored and delivered later
-    channel.queue_declare(queue=user_queue, durable=True)
-
     channel.queue_bind(exchange=topic, queue=user_queue)
-
 
 
 #consume messages from BROKER_QUEUE

@@ -25,6 +25,16 @@ user = input("> ")
 user_dir = os.path.join("users", user)
 myName, myQueue, myPK = load_user(user_dir)
 
+
+def is_encrypted(obj) -> bool:
+    return (
+        isinstance(obj, dict)
+        and "enc_session_key" in obj
+        and "nonce" in obj
+        and "tag" in obj
+        and "ciphertext" in obj
+    )
+
 def send_message_to_broker(message):
     package = encrypt_message(json.dumps(message).encode('utf-8'), user_dir, msgBrokerPK)
     send_channel.basic_publish(exchange="", routing_key=BROKER_QUEUE,
@@ -66,8 +76,11 @@ def create_receiver_msg(receiver_username, receiverPK, msg="Hello!"):
 
 
 def message_callback(ch, method, properties, body):
-    message, _ = decrypt_message(json.loads(body), user_dir)
-    message = json.loads(message.decode())
+    if is_encrypted(json.loads(body)):
+        message, _ = decrypt_message(json.loads(body), user_dir)
+        message = json.loads(message.decode())
+    else:
+        message = json.loads(body)
     msg_type = message.get("msgTheme")
 
     if msg_type == "registration_ack":
@@ -86,11 +99,15 @@ def message_callback(ch, method, properties, body):
 
     elif msg_type == "transient_announcement":
         print("[USER] Received transient announcement: " + message["announcement"])
+    
     elif msg_type == "persistent_announcement":
         print("[USER] Received persistent announcement: " + message["announcement"])
 
     else:
         print("[USER] Unknown message type received:", msg_type)
+
+
+
 
 def start_consumer():
     consumer_connection = pika.BlockingConnection(pika.ConnectionParameters(RABBITMQ_HOST))
@@ -159,16 +176,7 @@ while True:
             "announcement": announcement
         }
         send_message_to_broker(msgBody)
-
     elif choice == "4":
-        topic = input("Select topic to subscribe to:\n> ")
-        msgBody = {
-            "msgTheme": "subscribe_transient",
-            "senderName": myName,
-            "topic": topic
-        }
-        send_message_to_broker(msgBody)
-    elif choice == "5":
         topic = input("Select topic to announce to:\n> ")
         announcement = input("Enter your announcement:\n> ")
         msgBody = {
@@ -178,16 +186,7 @@ while True:
             "announcement": announcement
         }
         send_message_to_broker(msgBody)
-
-    elif choice == "6":
-        topic = input("Select topic to subscribe to:\n> ")
-        msgBody = {
-            "msgTheme": "subscribe_persistent",
-            "senderName": myName,
-            "topic": topic
-        }
-        send_message_to_broker(msgBody)
-    elif choice == "7":
+    elif choice == "5":
         announcement = input("Enter your announcement:\n> ")
         msgBody = {
             "msgTheme": "announce_evenGroup",
@@ -196,7 +195,7 @@ while True:
         }
         send_message_to_broker(msgBody)
 
-    elif choice == "8":
+    elif choice == "6":
         announcement = input("Enter your announcement:\n> ")
         msgBody = {
             "msgTheme": "announce_oddGroup",
@@ -204,7 +203,7 @@ while True:
             "announcement": announcement
         }
         send_message_to_broker(msgBody)
-    elif choice == "9":
+    elif choice == "7":
         print("[USER] Exiting...")
         connection.close()
         break
