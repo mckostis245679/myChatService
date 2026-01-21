@@ -59,9 +59,9 @@ def callback(ch, method, props, body):
             with open(STATE_FILE, "w") as f:
                 json.dump(publicKeysDict, f)
             if msg["senderName"] % 2 == 0:
-                subscribe_persistent(channel,"odd_group",msg["userQueue"])
+                subscribe_persistent("odd_group",msg["userQueue"])
             else:
-                subscribe_transient(channel,"even_group",msg["userQueue"])
+                subscribe_transient("even_group",msg["userQueue"])
 
             send_ack(user_name, "Registration successful.")
         return
@@ -96,38 +96,38 @@ def callback(ch, method, props, body):
 
     elif msg["msgTheme"] == "announce_transient":
         topic = msg["topic"]
-        subscribe_transient(channel,topic,publicKeysDict[user_name]["userQueue"])
-        publish_transient(channel,topic,msg)
+        subscribe_transient(topic,publicKeysDict[user_name]["userQueue"])
+        publish_transient(topic,msg)
         print(f"[BROKER] Announced transient message on topic: {topic}")
 
     elif msg["msgTheme"] == "announce_persistent":
         topic = msg["topic"]
-        subscribe_persistent(channel,topic,publicKeysDict[user_name]["userQueue"])
-        publish_persistent(channel,topic,msg)
+        subscribe_persistent(topic,publicKeysDict[user_name]["userQueue"])
+        publish_persistent(topic,msg)
         print(f"[BROKER] Announced persistent message on topic: {topic}")
 
     elif msg["msgTheme"] == "announce_evenGroup":
         if msg["senderName"] % 2 != 0:
             send_ack(user_name,"Only even users can announce to even group")
             return
-        #subscribe_transient(channel,"even_group",publicKeysDict[user_name]["userQueue"])
+        #subscribe_transient("even_group",publicKeysDict[user_name]["userQueue"])
         message={
             "msgTheme":"transient_announcement",
             "announcement":msg["announcement"]
         }
-        publish_transient(channel,"even_group",message)
+        publish_transient("even_group",message)
         print(f"[BROKER] Announced transient message to even group")
     
     elif msg["msgTheme"] == "announce_oddGroup":
         if msg["senderName"] % 2 == 0:
             send_ack(user_name,"Only odd users can announce to odd group")
             return
-        #subscribe_persistent(channel,"odd_group",publicKeysDict[user_name]["userQueue"])
+        #subscribe_persistent("odd_group",publicKeysDict[user_name]["userQueue"])
         message={
             "msgTheme":"persistent_announcement",
             "announcement":msg["announcement"]
         }
-        publish_persistent(channel,"odd_group",message)
+        publish_persistent("odd_group",message)
         print(f"[BROKER] Announced persistent message to odd group")
 
 
@@ -172,32 +172,41 @@ def encrypt_message(original_message, PK):
     return package
 
 
-def publish_transient(channel, topic, encrypted_message):
+def publish_transient( topic, msg):
+    message={
+        "msgTheme":"announce_transient",
+        "topic":topic,
+        "announcement":msg["announcement"]
+    }
     # Transient: fine to be non-durable
     channel.exchange_declare(exchange=topic, exchange_type='fanout', durable=False)
-
     channel.basic_publish(
         exchange=topic,
         routing_key='',
-        body=json.dumps(encrypted_message).encode(),
+        body=json.dumps(message).encode(),
         properties=pika.BasicProperties(delivery_mode=1)  # transient
     )
 
-def publish_persistent(channel, topic, encrypted_message):
+def publish_persistent( topic, msg):
+    message={
+        "msgTheme":"announce_persistent",
+        "topic":topic,
+        "announcement":msg["announcement"]
+    }
     # Persistent: exchange durable + message persistent
     channel.exchange_declare(exchange=topic, exchange_type='fanout', durable=True)
     channel.basic_publish(
         exchange=topic,
         routing_key='',
-        body=json.dumps(encrypted_message).encode(),
+        body=json.dumps(message).encode(),
         properties=pika.BasicProperties(delivery_mode=2)  # persistent
     )
 
-def subscribe_transient(channel, topic, user_queue):
+def subscribe_transient( topic, user_queue):
     channel.exchange_declare(exchange=topic, exchange_type='fanout', durable=False)
     channel.queue_bind(exchange=topic, queue=user_queue)
 
-def subscribe_persistent(channel, topic, user_queue):
+def subscribe_persistent( topic, user_queue):
     channel.exchange_declare(exchange=topic, exchange_type='fanout', durable=True)
     channel.queue_bind(exchange=topic, queue=user_queue)
 

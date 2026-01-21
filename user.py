@@ -97,11 +97,11 @@ def message_callback(ch, method, properties, body):
         senderMsg = json.loads(senderMsg.decode())
         print(f"[USER] Received message from {senderMsg['sender']}: {senderMsg['msg']}")
 
-    elif msg_type == "transient_announcement":
-        print("[USER] Received transient announcement: " + message["announcement"])
-    
-    elif msg_type == "persistent_announcement":
-        print("[USER] Received persistent announcement: " + message["announcement"])
+    elif msg_type == "announce_transient":
+        print("["+ message["topic"] + "] Received transient announcement: " + message["announcement"])
+
+    elif msg_type == "announce_persistent":
+        print("["+ message["topic"] + "] Received persistent announcement: " + message["announcement"])
 
     else:
         print("[USER] Unknown message type received:", msg_type)
@@ -130,12 +130,10 @@ while True:
     print("1. Wait for messages")
     print("2. Send message to receiver")
     print("3. Send transient announcement to subscribers")
-    print("4. Subscribe to transient announcements")
-    print("5. Send persistent announcement to subscribers")
-    print("6. Subscribe to persistent announcements")
-    print("7.Send transient announcement to evenGroup")
-    print("8.Send persistent announcement to oddGroup")
-    print("9. Exit")
+    print("4. Send persistent announcement to subscribers")
+    print("5. Send transient announcement to evenGroup")
+    print("6. Send persistent announcement to oddGroup")
+    print("7. Exit")
 
     choice = input("> ")
 
