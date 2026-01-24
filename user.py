@@ -1,17 +1,19 @@
 import json
 import threading
 import time
+import pika
 import os
 from Cryptodome.PublicKey import RSA
+
 from crypto_layer import *
-import pika
+from CH9_HeaderFile         import *
 
 RABBITMQ_HOST = "localhost"
 BROKER_QUEUE = "broker_public"
 
 
-receiver_public_key_cache = {}
-
+recipient_public_key_cache = {}
+userGroup=""  # assigned upon registration
 
 connection = pika.BlockingConnection(pika.ConnectionParameters(RABBITMQ_HOST))
 send_channel = connection.channel()
@@ -20,11 +22,13 @@ send_channel = connection.channel()
 msgBrokerPK = RSA.import_key(open("broker_public.pem").read())
 
 
-print("Login with your username:")
+print_msg("CLIENT","Login with your username:")
 user = input("> ")
 user_dir = os.path.join("users", user)
-myName, myQueue, myPK = load_user(user_dir)
+myName, myQueue, myPK, mySK = load_user(user_dir)
 
+def is_signed(encrypted_msg):
+    return isinstance(encrypted_msg, dict) and "signature" in encrypted_msg
 
 def is_encrypted(obj) -> bool:
     return (
@@ -36,40 +40,39 @@ def is_encrypted(obj) -> bool:
     )
 
 def send_message_to_broker(message):
-    package = encrypt_message(json.dumps(message).encode('utf-8'), user_dir, msgBrokerPK)
+    package = encrypt_message(json.dumps(message).encode('utf-8'), mySK, msgBrokerPK)
     send_channel.basic_publish(exchange="", routing_key=BROKER_QUEUE,
                                body=json.dumps(package).encode())
 
 def register():
     message = {
         "msgTheme": "register",
-        "userName": myName,
-        "userPublicKey": myPK.decode('utf-8'),
+        "senderName": myName,
+        "userPublicKey": myPK.export_key().decode("utf-8"),
         "userQueue": myQueue
     }
     send_message_to_broker(message)
-    print("[USER] Registered")
 
-def request_receiver_public_key(receiver_username):
+def request_public_key(recipient_username):
     message = {
         "msgTheme": "request_public_key",
         "senderName": myName,
-        "receiverName": receiver_username
+        "recipientName": recipient_username
     }
     send_message_to_broker(message)
-    print(f"[USER] Requested public key for {receiver_username}")
+    print_msg("CLIENT", f"Requested public key for {recipient_username}")
 
-def create_receiver_msg(receiver_username, receiverPK, msg="Hello!"):
+def create_recipient_msg(recipient_username, recipientPK, msg="Hello!"):
     msgBody = {
-        "msgTheme": "message_to_receiver",
+        "msgTheme": "message_to_recipient",
         "sender": myName,
         "msg": msg
     }
-    encrypted_msgBody = encrypt_message(json.dumps(msgBody).encode('utf-8'), user_dir, receiverPK)
+    encrypted_msgBody = encrypt_message(json.dumps(msgBody).encode('utf-8'), mySK, recipientPK)
     message = {
-        "msgTheme": "message_to_receiver",
+        "msgTheme": "message_to_recipient",
         "senderName": myName,
-        "receiverName": receiver_username,
+        "recipientName": recipient_username,
         "encrypted_for_recipient": encrypted_msgBody
     }
     send_message_to_broker(message)
@@ -77,44 +80,65 @@ def create_receiver_msg(receiver_username, receiverPK, msg="Hello!"):
 
 def message_callback(ch, method, properties, body):
     if is_encrypted(json.loads(body)):
-        message, _ = decrypt_message(json.loads(body), user_dir)
+        message, _ = decrypt_message(json.loads(body), mySK)
         message = json.loads(message.decode())
     else:
         message = json.loads(body)
+
     msg_type = message.get("msgTheme")
 
-    if msg_type == "registration_ack":
-        print("[ACK] " + message["content"])
+    match msg_type:
 
-    elif msg_type == "public_key_response":
-        receiverPK = RSA.import_key(message["receiverPublicKey"].encode('utf-8'))
-        receiver_public_key_cache[message["receiverName"]] = receiverPK
-        print(f"[USER] Public key for {message['receiverName']} cached")
+        case "ACK":
+            print_msg("CLIENT", "[ACK] " + message["content"])
+            userGroup = message["userGroup"]
+            print_msg("CLIENT", f"[USER] Registered in group: {userGroup}")
 
-    elif msg_type == "message_to_receiver":
-        encryptedMsg = message["encrypted_for_recipient"]
-        senderMsg, _ = decrypt_message(encryptedMsg, user_dir)
-        senderMsg = json.loads(senderMsg.decode())
-        print(f"[USER] Received message from {senderMsg['sender']}: {senderMsg['msg']}")
+        case "public_key_response":
+            recipientPK = RSA.import_key(message["recipientPublicKey"].encode('utf-8'))
+            recipient_public_key_cache[message["recipientName"]] = recipientPK
+            print_msg("CLIENT", f"[USER] Public key for {message['recipientName']} cached")
 
-    elif msg_type == "announce_transient":
-        print("["+ message["topic"] + "] Received transient announcement: " + message["announcement"])
+        case "message_to_recipient":
+            encryptedMsg = message["encrypted_for_recipient"]
+            sender_plain_bytes, sender_signature_hex = decrypt_message(encryptedMsg, mySK)
+            senderMsg = json.loads(sender_plain_bytes.decode())
+            wait_for_public_key(senderMsg['sender'])
+            senderPK = recipient_public_key_cache.get(senderMsg['sender'])
 
-    elif msg_type == "announce_persistent":
-        print("["+ message["topic"] + "] Received persistent announcement: " + message["announcement"])
+            if is_signed(encryptedMsg):
+                if not verify_signature(senderMsg['msg'], sender_signature_hex, senderPK):
+                    print_msg("CLIENT", f"[SECURITY] Invalid signature from {senderMsg['sender']}. Dropping message.")
+                    return
 
+            print_msg("ALICE", f"[USER] Received message from {senderMsg['sender']}: {senderMsg['msg']}")
+
+        case "announce_transient":
+            print_msg("RECEIVER", "[" + message["topic"] + "] Received transient announcement: " + message["announcement"])
+
+        case "announce_persistent":
+            print_msg("RECEIVER", "[" + message["topic"] + "] Received persistent announcement: " + message["announcement"])
+
+        case _:
+            print_msg("CLIENT", "[USER] Unknown message type received:", msg_type)
+
+
+def wait_for_public_key(recipient_username, timeout=10):
+    request_public_key(recipient_username)
+    print_msg("SYSTEM", "[USER] Waiting for public key...")
+    wait_time = 0
+    while recipient_username not in recipient_public_key_cache and wait_time < 10:
+        time.sleep(0.5)
+        wait_time += 0.5
     else:
-        print("[USER] Unknown message type received:", msg_type)
-
-
-
+        print_msg("SYSTEM", "[ERROR] Failed to get public key for recipient")
 
 def start_consumer():
     consumer_connection = pika.BlockingConnection(pika.ConnectionParameters(RABBITMQ_HOST))
     channel = consumer_connection.channel()
     channel.queue_declare(queue=myQueue, durable=True)
     channel.basic_consume(queue=myQueue, on_message_callback=message_callback, auto_ack=True)
-    print("[USER] Consumer started, waiting for messages...")
+    print_msg("CLIENT", "[USER] Consumer started, waiting for messages...")
     channel.start_consuming()
 
 # launch consumer thread
@@ -128,83 +152,69 @@ register()
 while True:
     print("\nChoose an action:")
     print("1. Wait for messages")
-    print("2. Send message to receiver")
+    print("2. Send message to recipient")
     print("3. Send transient announcement to subscribers")
     print("4. Send persistent announcement to subscribers")
-    print("5. Send transient announcement to evenGroup")
-    print("6. Send persistent announcement to oddGroup")
-    print("7. Exit")
+    print("5. Send group broadcast to my userGroup")
+    print("6. Exit")
 
     choice = input("> ")
 
-    if choice == "1":
-        print("[USER] Waiting for messages... Press Enter to return to menu.")
-        input()
+    match choice:
 
-    elif choice == "2":
-        receiver_username = input("Enter receiver username:\n> ")
+        case "1":
+            print_msg("SYSTEM", "[USER] Waiting for messages... Press Enter to return to menu.")
+            input()
 
-        # Use cached public key if available, otherwise request
-        if receiver_username in receiver_public_key_cache:
-            receiverPK = receiver_public_key_cache[receiver_username]
-            print("[USER] Using cached public key")
-        else:
-            request_receiver_public_key(receiver_username)
-            print("[USER] Waiting for public key...")
-            wait_time = 0
-            while receiver_username not in receiver_public_key_cache and wait_time < 10:
-                time.sleep(0.5)
-                wait_time += 0.5
-            if receiver_username in receiver_public_key_cache:
-                receiverPK = receiver_public_key_cache[receiver_username]
+        case "2":
+            recipient_username = input("Enter recipient username:\n> ")
+
+            if recipient_username in recipient_public_key_cache:
+                recipientPK = recipient_public_key_cache[recipient_username]
+                print_msg("SYSTEM", "[USER] Using cached public key")
             else:
-                print("[ERROR] Failed to get public key for receiver")
-                continue
+                wait_for_public_key(recipient_username)
+                recipientPK = recipient_public_key_cache.get(recipient_username)
 
-        msg = input("Enter your message:\n> ")
-        create_receiver_msg(receiver_username, receiverPK, msg)
+            msg = input("Enter your message:\n> ")
+            create_recipient_msg(recipient_username, recipientPK, msg)
 
-    elif choice == "3":
-        topic = input("Select topic to announce to:\n> ")
-        announcement = input("Enter your announcement:\n> ")
-        msgBody = {
-            "msgTheme": "announce_transient",
-            "senderName": myName,
-            "topic": topic,
-            "announcement": announcement
-        }
-        send_message_to_broker(msgBody)
-    elif choice == "4":
-        topic = input("Select topic to announce to:\n> ")
-        announcement = input("Enter your announcement:\n> ")
-        msgBody = {
-            "msgTheme": "announce_persistent",
-            "senderName": myName,
-            "topic": topic,
-            "announcement": announcement
-        }
-        send_message_to_broker(msgBody)
-    elif choice == "5":
-        announcement = input("Enter your announcement:\n> ")
-        msgBody = {
-            "msgTheme": "announce_evenGroup",
-            "senderName": myName,
-            "announcement": announcement
-        }
-        send_message_to_broker(msgBody)
+        case "3":
+            topic = input("Select topic to announce to:\n> ")
+            announcement = input("Enter your announcement:\n> ")
+            msgBody = {
+                "msgTheme": "announce_transient",
+                "senderName": myName,
+                "topic": topic,
+                "announcement": announcement
+            }
+            send_message_to_broker(msgBody)
 
-    elif choice == "6":
-        announcement = input("Enter your announcement:\n> ")
-        msgBody = {
-            "msgTheme": "announce_oddGroup",
-            "senderName": myName,
-            "announcement": announcement
-        }
-        send_message_to_broker(msgBody)
-    elif choice == "7":
-        print("[USER] Exiting...")
-        connection.close()
-        break
+        case "4":
+            topic = input("Select topic to announce to:\n> ")
+            announcement = input("Enter your announcement:\n> ")
+            msgBody = {
+                "msgTheme": "announce_persistent",
+                "senderName": myName,
+                "topic": topic,
+                "body": announcement
+            }
+            send_message_to_broker(msgBody)
 
-    else:
-        print("[USER] Invalid choice. Please try again.")
+        case "5":
+            announcement = input("Enter your announcement:\n> ")
+            msgBody = {
+                "msgTheme": "group_broadcast",
+                "userGroup": userGroup,
+                "senderName": myName,
+                "body": announcement
+            }
+            send_message_to_broker(msgBody)
+
+        case "6":
+            print_msg("SYSTEM", "[USER] Exiting...")
+            connection.close()
+            break
+
+        case _:
+            print_msg("SYSTEM", "[USER] Invalid choice. Please try again.")
