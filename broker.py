@@ -6,7 +6,7 @@ from Cryptodome.Hash import SHA256, TupleHash128
 from Cryptodome.Signature import pss
 from Cryptodome.Random import get_random_bytes
 
-from crypto_layer import *
+from rsa_aes_encrypt_decrypt_sign import *
 from CH9_HeaderFile         import *
 
 connection = pika.BlockingConnection(pika.ConnectionParameters("localhost"))
@@ -34,7 +34,6 @@ def callback(ch, method, props, body):
     msg = json.loads(msg.decode())
 
     userName = msg.get("senderName")
-    
 
     match msg["msgTheme"]:
         case "register":
@@ -90,8 +89,7 @@ def callback(ch, method, props, body):
                 subscribe_transient("even_group", publicKeysDict[userName]["userQueue"])
                 publish_transient("even_group", message)
                 print_msg("SERVER", f"[BROKER] Announced transient message to even group")
-            
-            elif msg["userGroup"] == "odd_group":
+            else:
                 message = {
                     "msgTheme": "persistent_announcement",
                     "announcement": msg["body"]
@@ -103,8 +101,10 @@ def callback(ch, method, props, body):
 def send_ACK(userName, content):
     if int(userName[-1], 16) % 2 == 1:
         userGroup="odd_group"
+        subscribe_persistent("odd_group", publicKeysDict[userName]["userQueue"])
     else:
         userGroup="even_group"
+        subscribe_transient("even_group", publicKeysDict[userName]["userQueue"])
 
     ack_message = {
         "msgTheme": "ACK",
@@ -129,7 +129,7 @@ def publish_transient( topic, msg):
         "topic":topic,
         "announcement":msg["announcement"]
     }
-    # Transient: fine to be non-durable
+    # Transient:  non-durable
     channel.exchange_declare(exchange=topic, exchange_type='fanout', durable=False)
     channel.basic_publish(
         exchange=topic,

@@ -5,7 +5,7 @@ import pika
 import os
 from Cryptodome.PublicKey import RSA
 
-from crypto_layer import *
+from rsa_aes_encrypt_decrypt_sign import *
 from CH9_HeaderFile         import *
 
 RABBITMQ_HOST = "localhost"
@@ -21,11 +21,11 @@ send_channel = connection.channel()
 # Load broker public key
 msgBrokerPK = RSA.import_key(open("broker_public.pem").read())
 
-
 print_msg("CLIENT","Login with your username:")
 user = input("> ")
 user_dir = os.path.join("users", user)
 myName, myQueue, myPK, mySK = load_user(user_dir)
+print_msg("CLIENT", f"Logged in as {myName}, queue: {myQueue}")
 
 def is_signed(encrypted_msg):
     return isinstance(encrypted_msg, dict) and "signature" in encrypted_msg
@@ -73,6 +73,7 @@ def create_recipient_msg(recipient_username, recipientPK, msg="Hello!"):
         "msgTheme": "message_to_recipient",
         "senderName": myName,
         "recipientName": recipient_username,
+        "senderPublicKey": myPK.export_key().decode("utf-8"),
         "encrypted_for_recipient": encrypted_msgBody
     }
     send_message_to_broker(message)
@@ -103,11 +104,10 @@ def message_callback(ch, method, properties, body):
             encryptedMsg = message["encrypted_for_recipient"]
             sender_plain_bytes, sender_signature_hex = decrypt_message(encryptedMsg, mySK)
             senderMsg = json.loads(sender_plain_bytes.decode())
-            wait_for_public_key(senderMsg['sender'])
-            senderPK = recipient_public_key_cache.get(senderMsg['sender'])
+            senderPK = RSA.import_key(message["senderPublicKey"].encode("utf-8"))
 
             if is_signed(encryptedMsg):
-                if not verify_signature(senderMsg['msg'], sender_signature_hex, senderPK):
+                if not verify_signature(sender_plain_bytes, sender_signature_hex, senderPK):
                     print_msg("CLIENT", f"[SECURITY] Invalid signature from {senderMsg['sender']}. Dropping message.")
                     return
 
@@ -130,7 +130,7 @@ def wait_for_public_key(recipient_username, timeout=10):
     while recipient_username not in recipient_public_key_cache and wait_time < 10:
         time.sleep(0.5)
         wait_time += 0.5
-    else:
+    if recipient_username not in recipient_public_key_cache:
         print_msg("SYSTEM", "[ERROR] Failed to get public key for recipient")
 
 def start_consumer():
@@ -148,25 +148,19 @@ consumer_thread.start()
 
 register()
 
-# ---------------- Main Loop ----------------
+#Main Loop
 while True:
     print("\nChoose an action:")
-    print("1. Wait for messages")
-    print("2. Send message to recipient")
-    print("3. Send transient announcement to subscribers")
-    print("4. Send persistent announcement to subscribers")
-    print("5. Send group broadcast to my userGroup")
-    print("6. Exit")
-
+    print("1. Send message to recipient")
+    print("2. Send transient announcement to subscribers")
+    print("3. Send persistent announcement to subscribers")
+    print("4. Send group broadcast to my userGroup")
+    print("5. Exit")
     choice = input("> ")
 
     match choice:
 
         case "1":
-            print_msg("SYSTEM", "[USER] Waiting for messages... Press Enter to return to menu.")
-            input()
-
-        case "2":
             recipient_username = input("Enter recipient username:\n> ")
 
             if recipient_username in recipient_public_key_cache:
@@ -179,7 +173,7 @@ while True:
             msg = input("Enter your message:\n> ")
             create_recipient_msg(recipient_username, recipientPK, msg)
 
-        case "3":
+        case "2":
             topic = input("Select topic to announce to:\n> ")
             announcement = input("Enter your announcement:\n> ")
             msgBody = {
@@ -190,28 +184,28 @@ while True:
             }
             send_message_to_broker(msgBody)
 
-        case "4":
+        case "3":
             topic = input("Select topic to announce to:\n> ")
             announcement = input("Enter your announcement:\n> ")
             msgBody = {
                 "msgTheme": "announce_persistent",
                 "senderName": myName,
                 "topic": topic,
-                "body": announcement
+                "announcement": announcement
             }
             send_message_to_broker(msgBody)
 
-        case "5":
+        case "4":
             announcement = input("Enter your announcement:\n> ")
             msgBody = {
                 "msgTheme": "group_broadcast",
                 "userGroup": userGroup,
                 "senderName": myName,
-                "body": announcement
+                "announcement": announcement
             }
             send_message_to_broker(msgBody)
 
-        case "6":
+        case "5":
             print_msg("SYSTEM", "[USER] Exiting...")
             connection.close()
             break
