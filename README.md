@@ -1,5 +1,4 @@
 # myChatService
-# myChatService
 
 A simple secure chat application built with Python and RabbitMQ.
 
